@@ -22,15 +22,15 @@ client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online!`);
 });
 
-// Ensure a Discord user is registered in our DB; if not, register them and return the user record
-function ensureRegisteredUser(user) {
-    let userData = db.getUser(user.id);
-    if (userData) return userData;
+// Ensures a user exists in DB, auto-register if missing
+async function ensureRegisteredUser(user) {
+  const existing = await db.getUser(user.id);
+  if (existing) return existing;
 
-    const avatarUrl = user.displayAvatarURL({ dynamic: true, size: 256 });
-    const tag = user.tag ?? `${user.username}#${user.discriminator ?? '0'}`;
-    db.registerUser(user.id, user.username, tag, avatarUrl);
-    return db.getUser(user.id);
+  const tag = user.tag || `${user.username}#${user.discriminator || '0000'}`;
+  const avatar = user.displayAvatarURL ? user.displayAvatarURL({ size: 256, extension: 'png' }) : '';
+  await db.registerUser(user.id, user.username, tag, avatar);
+  return await db.getUser(user.id);
 }
 
 // Listen for messages
@@ -77,7 +77,7 @@ client.on('messageCreate', async (message) => {
 
         const avatarUrl = targetUser.displayAvatarURL({ dynamic: true, size: 256 });
         
-        const result = db.registerUser(
+        const result = await db.registerUser(
             targetUser.id,
             targetUser.username,
             targetUser.tag,
@@ -128,8 +128,8 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
-        // Ensure user is registered (auto-register if not)
-        ensureRegisteredUser(message.author);
+    // Ensure user is registered (auto-register if not)
+    await ensureRegisteredUser(message.author);
 
         // Parse Riot ID (handle spaces in names)
         let riotId;
@@ -166,9 +166,15 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
-        const result = db.linkLolAccount(message.author.id, riotId);
-
-        if (result.success) {
+        // Linking
+        const linkRes = await db.linkLolAccount(message.author.id, riotId);
+        if (!linkRes.success) {
+            const botMessage = await message.channel.send(`❌ Failed to link account: ${linkRes.error}`);
+            setTimeout(() => {
+                message.delete().catch(() => {});
+                botMessage.delete().catch(() => {});
+            }, 10000);
+        } else {
             const embed = new EmbedBuilder()
                 .setColor(0x0099FF)
                 .setTitle('🎮 LoL Account Linked!')
@@ -187,25 +193,19 @@ client.on('messageCreate', async (message) => {
                 message.delete().catch(() => {});
                 botMessage.delete().catch(() => {});
             }, 10000);
-        } else {
-            const botMessage = await message.channel.send(`❌ Failed to link account: ${result.error}`);
-            setTimeout(() => {
-                message.delete().catch(() => {});
-                botMessage.delete().catch(() => {});
-            }, 10000);
         }
     }
 
     // !profile command - View user profile
     else if (command === '!profile') {
         // Check if mentioning another user
-        const targetUser = message.mentions.users.first() || message.author;
-        let userData = db.getUser(targetUser.id);
+    const targetUser = message.mentions.users.first() || message.author;
+    let userData = await db.getUser(targetUser.id);
 
         if (!userData) {
             if (targetUser.id === message.author.id) {
                 // Auto-register the author and continue
-                userData = ensureRegisteredUser(targetUser);
+                userData = await ensureRegisteredUser(targetUser);
             } else {
                 message.channel.send('❌ This user is not registered.');
                 return;
@@ -278,17 +278,17 @@ client.on('messageCreate', async (message) => {
         }
 
         // Check if target user is registered
-        const userData = db.getUser(targetUser.id);
+    const userData = await db.getUser(targetUser.id);
         if (!userData) {
             message.channel.send('❌ This user is not registered!');
             return;
         }
 
         // Adjust ELO
-        const result = db.adjustUserElo(targetUser.id, eloChange);
+    const result = await db.adjustUserElo(targetUser.id, eloChange);
 
         if (result.success) {
-            const newUserData = db.getUser(targetUser.id);
+            const newUserData = await db.getUser(targetUser.id);
             const changeText = eloChange > 0 ? `+${eloChange}` : `${eloChange}`;
             
             const embed = new EmbedBuilder()
@@ -330,17 +330,17 @@ client.on('messageCreate', async (message) => {
         }
 
         // Check if target user is registered
-        const userData = db.getUser(targetUser.id);
+    const userData = await db.getUser(targetUser.id);
         if (!userData) {
             message.channel.send('❌ This user is not registered!');
             return;
         }
 
         // Remove win
-        const result = db.removeWin(targetUser.id);
+    const result = await db.removeWin(targetUser.id);
 
         if (result.success) {
-            const newUserData = db.getUser(targetUser.id);
+            const newUserData = await db.getUser(targetUser.id);
             
             const embed = new EmbedBuilder()
                 .setColor(0xFF8800)
@@ -382,17 +382,17 @@ client.on('messageCreate', async (message) => {
         }
 
         // Check if target user is registered
-        const userData = db.getUser(targetUser.id);
+    const userData = await db.getUser(targetUser.id);
         if (!userData) {
             message.channel.send('❌ This user is not registered!');
             return;
         }
 
         // Remove loss
-        const result = db.removeLoss(targetUser.id);
+    const result = await db.removeLoss(targetUser.id);
 
         if (result.success) {
-            const newUserData = db.getUser(targetUser.id);
+            const newUserData = await db.getUser(targetUser.id);
             
             const embed = new EmbedBuilder()
                 .setColor(0xFF8800)
@@ -417,7 +417,7 @@ client.on('messageCreate', async (message) => {
     // !leaderboard command - Show Top 5 by ELO and Top 5 by Win Rate
     else if (command === '!leaderboard') {
         // Fetch all users
-        const users = db.getAllUsers();
+    const users = await db.getAllUsers();
 
         if (!users || users.length === 0) {
             message.channel.send('❌ No registered users yet. Use `!register` to get started.');
@@ -873,10 +873,12 @@ client.on('messageReactionAdd', async (reaction, user) => {
             }
 
             // Build full players list, ensuring ELO available
-            let players = [...pendingGame.team1, ...pendingGame.team2].map(p => {
-                const u = db.getUser(p.userId);
-                return { ...p, elo: p.elo ?? (u ? u.elo : 1500) };
-            });
+            let players = await Promise.all(
+                [...pendingGame.team1, ...pendingGame.team2].map(async p => {
+                    const u = await db.getUser(p.userId);
+                    return { ...p, elo: p.elo ?? (u ? u.elo : 1500) };
+                })
+            );
 
             const { team1, team2 } = randomizeBalancedTeams(players, pendingGame.team1, pendingGame.team2, 80);
 
@@ -932,7 +934,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
         if (reaction.emoji.name !== '✅') return;
 
         // Ensure user is registered (auto-register if not)
-        let userData = ensureRegisteredUser(user);
+    let userData = await ensureRegisteredUser(user);
 
         // Check if user is already in the game
         const alreadyJoined = balancedGame.players.some(p => p.userId === user.id);
@@ -970,7 +972,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     if (reaction.emoji.name !== '1️⃣' && reaction.emoji.name !== '2️⃣') return;
 
     // Ensure user is registered (auto-register if not)
-    let userData = ensureRegisteredUser(user);
+    let userData = await ensureRegisteredUser(user);
 
     const targetTeam = reaction.emoji.name === '1️⃣' ? 'team1' : 'team2';
     const otherTeam = targetTeam === 'team1' ? 'team2' : 'team1';
@@ -1240,21 +1242,19 @@ async function startBalancedGame(message, balancedGame) {
         return `${i + 1}. ${mention}${riot} (${p.elo} ELO)`;
     }).join('\n') || 'Empty';
 
+    const team1Count = team1.length;
+    const team2Count = team2.length;
+    const gameTitle = (team1Count === 5 && team2Count === 5) 
+        ? '⚔️ Game Ready - 5v5 Custom Game'
+        : `⚔️ Game Ready - ${team1Count}v${team2Count} Custom Game`;
+
     const finalEmbed = new EmbedBuilder()
         .setColor(0x0099FF)
-        .setTitle(`⚖️ Balanced Game Ready - ${team1.length}v${team2.length}`)
-        .setDescription(`**Teams balanced by ELO!**\n\n**Admins:** React with 1️⃣ if Team 1 wins or 2️⃣ if Team 2 wins to update ELO.`)
+        .setTitle(gameTitle)
+        .setDescription('**All players, please join the custom lobby!**\n\n**Admins:** React with 1️⃣ if Team 1 wins or 2️⃣ if Team 2 wins to update ELO. Use 🔁 to reshuffle teams while keeping ELO balanced.')
         .addFields(
-            { 
-                name: `🔵 Team 1 (Avg ELO: ${team1AvgElo})`, 
-                value: team1List, 
-                inline: true 
-            },
-            { 
-                name: `🔴 Team 2 (Avg ELO: ${team2AvgElo})`, 
-                value: team2List, 
-                inline: true 
-            },
+            { name: `🔵 Team 1 (${team1Count}) (Avg ELO: ${team1AvgElo})`, value: team1List, inline: true },
+            { name: `🔴 Team 2 (${team2Count}) (Avg ELO: ${team2AvgElo})`, value: team2List, inline: true },
         )
         .setFooter({ text: 'Good luck and have fun!' })
         .setTimestamp();
@@ -1262,22 +1262,23 @@ async function startBalancedGame(message, balancedGame) {
     const channel = await client.channels.fetch(balancedGame.channelId);
     const resultsMessage = await channel.send({ embeds: [finalEmbed] });
 
-    // Add reactions for admins to select winner and reshuffle teams
+    // Add reactions for admins to select winner or reshuffle
     await resultsMessage.react('1️⃣');
     await resultsMessage.react('2️⃣');
     await resultsMessage.react('🔁');
 
-    // Store pending game result
+    // Store pending game result with a unique identifier
     const pendingGame = {
         messageId: resultsMessage.id,
         channelId: balancedGame.channelId,
         team1: team1,
         team2: team2,
         resolved: false,
-        eloChangeAllowed: true,
+        eloChangeAllowed: true, // balanced games do change ELO
         gameType: 'balanced',
     };
     
+    // Store in a collection for pending games (we'll add this)
     if (!client.pendingGameResults) {
         client.pendingGameResults = new Map();
     }
@@ -1421,12 +1422,12 @@ async function processGameResult(message, pendingGame, winningTeam) {
         let loserTotalElo = 0;
 
         for (const player of winners) {
-            const userData = db.getUser(player.userId);
+            const userData = await db.getUser(player.userId);
             if (userData) winnerTotalElo += userData.elo;
         }
 
         for (const player of losers) {
-            const userData = db.getUser(player.userId);
+            const userData = await db.getUser(player.userId);
             if (userData) loserTotalElo += userData.elo;
         }
 
@@ -1439,12 +1440,12 @@ async function processGameResult(message, pendingGame, winningTeam) {
 
     // Update stats for winners
     for (const player of winners) {
-        db.updateUserStats(player.userId, eloChange, true);
+        await db.updateUserStats(player.userId, eloChange, true);
     }
 
     // Update stats for losers
     for (const player of losers) {
-        db.updateUserStats(player.userId, -eloChange, false);
+        await db.updateUserStats(player.userId, -eloChange, false);
     }
 
     // Store game result for undo functionality
@@ -1512,13 +1513,13 @@ async function undoGameResult(message, gameResult) {
 
     // Revert stats for winners (remove win, subtract ELO)
     for (const player of winners) {
-        db.revertGameStats(player.userId, gameResult.eloChange, true);
+        await db.revertGameStats(player.userId, gameResult.eloChange, true);
         console.log(`[UNDO] ${player.username}: Reverted win, -${gameResult.eloChange} ELO`);
     }
 
     // Revert stats for losers (remove loss, add back ELO)
     for (const player of losers) {
-        db.revertGameStats(player.userId, -gameResult.eloChange, false);
+        await db.revertGameStats(player.userId, -gameResult.eloChange, false);
         console.log(`[UNDO] ${player.username}: Reverted loss, +${gameResult.eloChange} ELO`);
     }
 

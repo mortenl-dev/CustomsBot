@@ -6,13 +6,16 @@
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["discord", "bot"],
+  "keywords": [
+    "discord",
+    "bot"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "better-sqlite3": "^9.6.0",
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
-    "better-sqlite3": "^9.2.2"
+    "pg": "^8.16.3"
   }
 }
-
